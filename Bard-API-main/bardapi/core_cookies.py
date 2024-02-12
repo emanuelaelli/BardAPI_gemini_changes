@@ -1,4 +1,3 @@
-# The Python file is considered legacy and will only be used up to version 0.1.39.
 import os
 import re
 import string
@@ -43,10 +42,6 @@ class BardCookies(Bard):
             run_code (bool, optional, default = False): Whether to execute code included in the answer (Python only).
             token_from_browser (bool, optional, default = False): Whether to extract the token from browser cookies.
         """
-        print("The BardCookies class is no longer in use.")
-        print(
-            "Please use the Bard class with the 'cookie_dict' and 'multi_cookies_bool' arguments in the Bard constructor."
-        )
         self.cookie_dict = cookie_dict or self._get_token(token_from_browser)
         self.proxies = proxies
         self.timeout = timeout
@@ -95,10 +90,10 @@ class BardCookies(Bard):
 
         if session is None:
             new_session = requests.Session()
-            new_session.headers = SESSION_HEADERS
-
+            cookie = ""
             for k, v in self.cookie_dict.items():
-                new_session.cookies.set(k, v)
+                cookie += f"{k}={v}; "
+            new_session.headers.update({"Cookie": cookie})
             return new_session
         else:
             return session
@@ -113,7 +108,7 @@ class BardCookies(Bard):
             Exception: If the __Secure-1PSID value is invalid or SNlM0e value is not found in the response.
         """
         resp = self.session.get(
-            "https://bard.google.com/", timeout=self.timeout, proxies=self.proxies
+            "https://gemini.google.com/app", timeout=self.timeout, proxies=self.proxies
         )
         if resp.status_code != 200:
             raise Exception(
@@ -278,21 +273,7 @@ class BardCookies(Bard):
 
 class BardAsyncCookies(BardAsync):
     """
-    BardAsyncCookies facilitates interaction with the Bard API via httpx[http2],
-    supporting efficient network use and improved performance with HTTP/2.
-
-    It's beneficial for managing cookies, especially for authentication or maintaining sessions.
-
-    Example:
-        from bardapi import ChatBardCookies
-
-        # Instantiate ChatBardCookies to manage cookies and authentication automatically.
-        chat = ChatBardCookies(token_from_browser=True)
-        chat.start()  # Initiates a chat session with automatic cookie handling.
-
-    Note:
-        'httpx[http2]' is required for HTTP/2 support.
-        'token_from_browser=True' fetches authentication tokens from browser cookies.
+    Bard class for interacting with the Bard API using httpx[http2]
     """
 
     def __init__(
@@ -372,7 +353,7 @@ class BardAsyncCookies(BardAsync):
         """
 
         resp = await self.client.get(
-            "https://bard.google.com/", timeout=self.timeout, follow_redirects=True
+            "https://gemini.google.com/app", timeout=self.timeout, follow_redirects=True
         )
         if resp.status_code != 200:
             raise Exception(
