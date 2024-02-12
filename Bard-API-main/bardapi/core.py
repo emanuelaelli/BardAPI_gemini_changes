@@ -7,15 +7,17 @@ import re
 import string
 import uuid
 import requests
-from typing import Optional
 
-# from urllib.parse import parse_qs, urlparse
+# Third-party imports
+from langdetect import detect
+from typing import Optional
 try:
-    from langdetect import detect
     from deep_translator import GoogleTranslator
     from google.cloud import translate_v2 as translate
 except ImportError:
     pass
+
+# Local module or custom library imports
 from bardapi.constants import (
     ALLOWED_LANGUAGES,
     REPLIT_SUPPORT_PROGRAM_LANGUAGES,
@@ -36,7 +38,7 @@ from bardapi.utils import (
 
 class Bard:
     """
-    Bard class for interacting with Google Bard.
+    Bard class for interacting with the Google Bard.
     """
 
     def __init__(
@@ -50,8 +52,6 @@ class Bard:
         language: Optional[str] = None,
         run_code: bool = False,
         token_from_browser: bool = False,
-        multi_cookies_bool: bool = False,
-        cookie_dict: dict = None,
     ):
         """
         Initialize the Bard instance.
@@ -61,17 +61,13 @@ class Bard:
             timeout (int, optional, default = 20): Request timeout in seconds.
             proxies (dict, optional): Proxy configuration for requests.
             session (requests.Session, optional): Requests session object.
-            conversation_id (str, optional): ID for fetching conversational context.
-            google_translator_api_key (str, optional): Google Cloud Translation API key.
+            conversation_id (str, optional): ID to fetch conversational context
+            google_translator_api_key (str, optional): Google cloud translation API key.
             language (str, optional): Natural language code for translation (e.g., "en", "ko", "ja").
-            run_code (bool, optional, default = False): Whether to directly execute the code included in the answer (IPython only).
-            token_from_browser (bool, optional, default = False): Retrieve a token from the browser.
-            multi_cookies_bool: When using token_from_browser, automatically extract 3 cookies (__Secure-1PSID, __Secure-1PSIDTS, __Secure-1PSIDCC).
-            cookie_dict: Pass 3 cookies (__Secure-1PSID, __Secure-1PSIDTS, __Secure-1PSIDCC) as keys with their respective values.
+            run_code (bool, optional, default = False): Whether to directly execute the code included in the answer (Python only)
+            token_from_browser (bool, optional, default = False): Gets a token from the browser
         """
-        self.cookie_dict = cookie_dict
-        self.multi_cookies_bool = multi_cookies_bool
-        self.token = self._get_token(token, token_from_browser, multi_cookies_bool)
+        self.token = self._get_token(token, token_from_browser)
         self.proxies = proxies
         self.timeout = timeout
         self._reqid = int("".join(random.choices(string.digits, k=4)))
@@ -83,24 +79,17 @@ class Bard:
         self.language = language or os.getenv("_BARD_API_LANG")
         self.run_code = run_code
         self.google_translator_api_key = google_translator_api_key
-        self.og_pid = ""
-        self.rot = ""
-        self.exp_id = ""
-        self.init_value = ""
 
         if google_translator_api_key:
             assert translate
 
-    def _get_token(
-        self, token: str, token_from_browser: bool, multi_cookies_bool: bool
-    ) -> str:
+    def _get_token(self, token: str, token_from_browser: bool) -> str:
         """
         Get the Bard API token either from the provided token or from the browser cookie.
 
         Args:
             token (str): Bard API token.
             token_from_browser (bool): Whether to extract the token from the browser cookie.
-            multi_cookies_bool (bool): Whether to extract multiple cookies from the browser.
 
         Returns:
             str: The Bard API token.
@@ -109,33 +98,17 @@ class Bard:
         """
         if token:
             return token
-
-        env_token = os.getenv("_BARD_API_KEY")
-        if env_token:
-            return env_token
-
-        if token_from_browser:
-            extracted_cookie_dict = extract_bard_cookie(cookies=multi_cookies_bool)
-            if self.multi_cookies_bool:
-                self.cookie_dict = extracted_cookie_dict
-                required_cookies = [
-                    "__Secure-1PSID",
-                    "__Secure-1PSIDTS",
-                    "__Secure-1PSIDCC",
-                ]
-                if len(extracted_cookie_dict) < len(required_cookies) or not all(
-                    key in extracted_cookie_dict for key in required_cookies
-                ):
-                    print(
-                        "Essential cookies (__Secure-1PSID, __Secure-1PSIDTS, __Secure-1PSIDCC) are missing."
-                    )
-                    return extracted_cookie_dict.get("__Secure-1PSID", "")
-            if extracted_cookie_dict:
-                return extracted_cookie_dict.get("__Secure-1PSID", "")
-
-        raise Exception(
-            "Bard API Key must be provided as the 'token' argument or extracted from the browser."
-        )
+        elif os.getenv("_BARD_API_KEY"):
+            return os.getenv("_BARD_API_KEY")
+        elif token_from_browser:
+            extracted_cookie_dict = extract_bard_cookie(cookies=False)
+            if not extracted_cookie_dict:
+                raise Exception("Failed to extract cookie from browsers.")
+            return extracted_cookie_dict["__Secure-1PSID"]
+        else:
+            raise Exception(
+                "Bard API Key must be provided as token argument or extracted from browser."
+            )
 
     def _get_session(self, session: Optional[requests.Session]) -> requests.Session:
         """
@@ -147,19 +120,14 @@ class Bard:
         Returns:
             requests.Session: The Session object.
         """
-        if session is not None:
+        if session is None:
+            new_session = requests.Session()
+            new_session.headers = SESSION_HEADERS
+            new_session.cookies.set("__Secure-1PSID", self.token)
+            new_session.proxies = self.proxies
+            return new_session
+        else:
             return session
-
-        new_session = requests.Session()
-        new_session.headers = SESSION_HEADERS
-        new_session.cookies.set("__Secure-1PSID", self.token)
-        new_session.proxies = self.proxies
-
-        if self.cookie_dict is not None:
-            for k, v in self.cookie_dict.items():
-                new_session.cookies.set(k, v)
-
-        return new_session
 
     def _get_snim0e(self) -> str:
         """
@@ -171,11 +139,11 @@ class Bard:
             Exception: If the __Secure-1PSID value is invalid or SNlM0e value is not found in the response.
         """
         if not self.token or self.token[-1] != ".":
-            print(
-                "__Secure-1PSID value should end with a single dot. Enter correct __Secure-1PSID value."
+            raise Exception(
+                "__Secure-1PSID value must end with a single dot. Enter correct __Secure-1PSID value."
             )
         resp = self.session.get(
-            "https://bard.google.com/", timeout=self.timeout, proxies=self.proxies
+            "https://gemini.google.com/", timeout=self.timeout, proxies=self.proxies
         )
         if resp.status_code != 200:
             raise Exception(
@@ -184,9 +152,81 @@ class Bard:
         snim0e = re.search(r"SNlM0e\":\"(.*?)\"", resp.text)
         if not snim0e:
             raise Exception(
-                "SNlM0e value not found. Double-check __Secure-1PSID value or pass it as Bard(token='xxxxx')"
+                "SNlM0e value not found. Double-check __Secure-1PSID value or pass it as token='xxxxx'."
             )
         return snim0e.group(1)
+
+    def ask(
+        self,
+        text: str,
+        image: Optional[bytes] = None,
+        image_name: Optional[str] = None,
+        tool: Optional[Tool] = None,
+    ) -> BardResult:
+        if image is not None:
+            image_url = upload_image(image)
+        else:
+            image_url = None
+
+        # Make post data structure and insert prompt
+        input_text_struct = build_input_text_struct(
+            text,
+            self.conversation_id,
+            self.response_id,
+            self.choice_id,
+            image_url,
+            image_name,
+            tools=[tool.value] if tool is not None else None,
+        )
+
+        # Get response
+        resp = self.session.post(
+            "https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate",
+            params={
+                "bl": TEXT_GENERATION_WEB_SERVER_PARAM,
+                "_reqid": str(self._reqid),
+                "rt": "c",
+            },
+            data={
+                "f.req": json.dumps([None, json.dumps(input_text_struct)]),
+                "at": self.SNlM0e,
+            },
+            timeout=self.timeout,
+            proxies=self.proxies,
+        )
+
+        if resp.status_code != 200:
+            raise Exception(
+                f"Response status code is not 200. Response Status is {resp.status_code}"
+            )
+
+        lines = [
+            line for line in resp.content.splitlines() if line.startswith(b'[["wrb.fr')
+        ]
+        jsons = [json.loads(json.loads(line)[0][2]) for line in lines]
+        # Post-processing of response
+        resp_json = jsons[-1]
+
+        if not resp_json:
+            raise {
+                "content": f"Response Error: {resp.content}. "
+                f"\nUnable to get response."
+                f"\nPlease double-check the cookie values and verify your network environment or google account."
+            }
+
+        res = BardResult(resp_json)
+        if not res.drafts:
+            res = BardResult(jsons[-2])
+
+        # Update params
+        self.conversation_id, self.response_id, self.choice_id = (
+            res.conversation_id,
+            res.response_id,
+            res.drafts[0].id,
+        )
+        self._reqid += 100000
+
+        return res
 
     def get_answer(
         self,
@@ -205,11 +245,15 @@ class Bard:
         >>> response = bard.get_answer("나와 내 동년배들이 좋아하는 뉴진스에 대해서 알려줘")
         >>> print(response['content'])
 
+        >>> response = bard.get_answer("Show me grocery stores close to the entrance to Grand Teton National Park and give me ideas for good snacks to bring hiking", tool=Tool.GOOGLE_MAPS)
+        >>> print(response['content'])
+
         Args:
             input_text (str): Input text for the query.
             image (bytes): Input image bytes for the query, support image types: jpeg, png, webp
             image_name (str): Short file name
             tool : tool to use can be one of Gmail, Google Docs, Google Drive, Google Flights, Google Hotels, Google Maps, Youtube
+
 
         Returns:
             dict: Answer from the Bard API in the following format:
@@ -277,7 +321,7 @@ class Bard:
 
         # Get response
         resp = self.session.post(
-            "https://bard.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate",
+            "https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate",
             params=params,
             data=data,
             timeout=self.timeout,
@@ -401,7 +445,7 @@ class Bard:
 
         # Get response
         resp = self.session.post(
-            "https://bard.google.com/_/BardChatUi/data/batchexecute",
+            "https://gemini.google.com/_/BardChatUi/data/batchexecute",
             params=params,
             data=data,
             timeout=self.timeout,
@@ -462,7 +506,7 @@ class Bard:
             "at": self.SNlM0e,
         }
         resp = self.session.post(
-            "https://bard.google.com/_/BardChatUi/data/batchexecute",
+            "https://gemini.google.com/_/BardChatUi/data/batchexecute",
             params=params,
             data=data,
             timeout=self.timeout,
@@ -515,25 +559,23 @@ class Bard:
             google_official_translator = translate.Client(
                 api_key=self.google_translator_api_key
             )
-        elif self.language is not None or lang is not None:
+        else:
             translator_to_eng = GoogleTranslator(source="auto", target="en")
 
         # [Optional] Set language
-        if self.language is None and lang is None:
-            translated_input_text = input_text
-        elif (
+        if (
             (self.language is not None or lang is not None)
             and self.language not in ALLOWED_LANGUAGES
             and self.google_translator_api_key is None
         ):
             translator_to_eng = GoogleTranslator(source="auto", target="en")
-            translated_input_text = translator_to_eng.translate(input_text)
+            transl_text = translator_to_eng.translate(input_text)
         elif (
             (self.language is not None or lang is not None)
             and self.language not in ALLOWED_LANGUAGES
             and self.google_translator_api_key is not None
         ):
-            translated_input_text = google_official_translator.translate(
+            transl_text = google_official_translator.translate(
                 input_text, target_language="en"
             )
         elif (
@@ -542,7 +584,7 @@ class Bard:
             and self.google_translator_api_key is None
         ):
             translator_to_eng = GoogleTranslator(source="auto", target="en")
-            translated_input_text = translator_to_eng.translate(input_text)
+            transl_text = translator_to_eng.translate(input_text)
 
         # Supported format: jpeg, png, webp
         image_url = upload_image(image)
@@ -550,12 +592,7 @@ class Bard:
         input_data_struct = [
             None,
             [
-                [
-                    translated_input_text,
-                    0,
-                    None,
-                    [[[image_url, 1], "uploaded_photo.jpg"]],
-                ],
+                [transl_text, 0, None, [[[image_url, 1], "uploaded_photo.jpg"]]],
                 [lang if lang is not None else self.language],
                 ["", "", ""],
                 "",  # Unknown random string value (1000 characters +)
@@ -579,7 +616,7 @@ class Bard:
         }
 
         resp = self.session.post(
-            "https://bard.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate",
+            "https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate",
             params=params,
             data=data,
             timeout=self.timeout,
@@ -597,9 +634,7 @@ class Bard:
         parsed_answer = json.loads(resp_dict)
         content = parsed_answer[4][0][1][0]
         try:
-            if self.language is None and self.google_translator_api_key is None:
-                translated_content = content
-            elif self.language is not None and self.google_translator_api_key is None:
+            if self.language is not None and self.google_translator_api_key is None:
                 translator = GoogleTranslator(source="en", target=self.language)
                 translated_content = translator.translate(content)
 
@@ -656,78 +691,6 @@ class Bard:
         )
         self._reqid += 100000
         return bard_answer
-
-    def ask(
-        self,
-        text: str,
-        image: Optional[bytes] = None,
-        image_name: Optional[str] = None,
-        tool: Optional[Tool] = None,
-    ) -> BardResult:
-        if image is not None:
-            image_url = upload_image(image)
-        else:
-            image_url = None
-
-        # Make post data structure and insert prompt
-        input_text_struct = build_input_text_struct(
-            text,
-            self.conversation_id,
-            self.response_id,
-            self.choice_id,
-            image_url,
-            image_name,
-            tools=[tool.value] if tool is not None else None,
-        )
-
-        # Get response
-        resp = self.session.post(
-            "https://bard.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate",
-            params={
-                "bl": TEXT_GENERATION_WEB_SERVER_PARAM,
-                "_reqid": str(self._reqid),
-                "rt": "c",
-            },
-            data={
-                "f.req": json.dumps([None, json.dumps(input_text_struct)]),
-                "at": self.SNlM0e,
-            },
-            timeout=self.timeout,
-            proxies=self.proxies,
-        )
-
-        if resp.status_code != 200:
-            raise Exception(
-                f"Response status code is not 200. Response Status is {resp.status_code}"
-            )
-
-        lines = [
-            line for line in resp.content.splitlines() if line.startswith(b'[["wrb.fr')
-        ]
-        jsons = [json.loads(json.loads(line)[0][2]) for line in lines]
-        # Post-processing of response
-        resp_json = jsons[-1]
-
-        if not resp_json:
-            raise {
-                "content": f"Response Error: {resp.content}. "
-                f"\nUnable to get response."
-                f"\nPlease double-check the cookie values and verify your network environment or google account."
-            }
-
-        res = BardResult(resp_json)
-        if not res.drafts:
-            res = BardResult(jsons[-2])
-
-        # Update params
-        self.conversation_id, self.response_id, self.choice_id = (
-            res.conversation_id,
-            res.response_id,
-            res.drafts[0].id,
-        )
-        self._reqid += 100000
-
-        return res
 
     def export_replit(
         self,
@@ -788,7 +751,7 @@ class Bard:
 
         # Get response
         resp = self.session.post(
-            "https://bard.google.com/_/BardChatUi/data/batchexecute",
+            "https://gemini.google.com/_/BardChatUi/data/batchexecute",
             params=params,
             data=data,
             timeout=self.timeout,
@@ -827,108 +790,3 @@ class Bard:
                 ):
                     links.append(item)
         return links
-
-    # def _set_cookie_refresh_data(self):
-    #     resp = self.session.get(
-    #         "https://bard.google.com/", timeout=self.timeout, proxies=self.proxies
-    #     )
-
-    #     og_pid_regex = r"https:\/\/accounts\.google\.com\/ListAccounts\?authuser=[0-9]+\\u0026pid=([0-9]+)"
-    #     exp_id_regex = r'https:\/\/accounts\.google\.com\/RotateCookiesPage"],([0-9]+,[0-9]+,[0-9]+,[0-9]+,[0-9]+,[0-9]+)'
-
-    #     matches_og_pid = re.search(og_pid_regex, resp.text)
-    #     matches_exp_id = re.search(exp_id_regex, resp.text)
-
-    #     print(matches_og_pid, matches_exp_id)
-    #     if matches_og_pid:
-    #         og_pid_url = matches_og_pid.group(0)
-    #         og_pid_query = urlparse(og_pid_url.replace("\\u0026", "&")).query
-    #         print(og_pid_query)
-    #         og_pid = parse_qs(og_pid_query)["pid"][0]
-    #         print(f"og_pid: {og_pid}")
-    #         self.og_pid = og_pid
-
-    #     if matches_exp_id:
-    #         values_str = matches_exp_id.group(1)
-    #         values_array = [int(val) for val in values_str.split(",")]
-    #         print(f"Values array: {values_array}")
-
-    #         if len(values_array) >= 5:
-    #             rot = values_array[0]
-    #             exp_id = values_array[4]
-
-    #             # You can print or use rot and exp_id as needed
-    #             print(f"rot: {rot}")
-    #             print(f"exp_id: {exp_id}")
-
-    #             self.rot = rot
-    #             self.exp_id = exp_id
-
-    #         # Update cookies using the extracted og_pid and exp_id
-    #         update_cookies_url = f"https://accounts.google.com/RotateCookiesPage?og_pid={self.og_pid}&rot={self.rot}&origin=https%3A%2F%2Fbard.google.com&exp_id={self.exp_id}"
-    #         headers_google = {
-    #             "Host": "accounts.google.com",
-    #             "Referer": "https://bard.google.com/",
-    #             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
-    #         }
-
-    #         try:
-    #             response = self.session.get(
-    #                 update_cookies_url,
-    #                 headers=headers_google,
-    #                 timeout=self.timeout,
-    #                 proxies=self.proxies,
-    #             )
-    #             response.raise_for_status()
-    #         except requests.exceptions.HTTPError as err:
-    #             print(f"HTTP Error: {err}")
-    #         # Extract initValue from the updated cookies
-    #         print(response.text)
-    #         init_value_regex = r"init\(\'(-?\d+)\',"
-    #         matches_init_value = re.findall(init_value_regex, response.text)
-    #         print(matches_init_value)
-    #         if matches_init_value:
-    #             self.init_value = matches_init_value[0]
-
-    # def update_1PSIDTS(self):
-    #     # Prepare request data
-    #     self._set_cookie_refresh_data()
-    #     data = [self.og_pid, f"{self.init_value}"]
-    #     data = json.dumps(data)
-    #     update_cookies_url = f"https://accounts.google.com/RotateCookiesPage?og_pid={self.og_pid}&rot={self.rot}&origin=https%3A%2F%2Fbard.google.com&exp_id={self.exp_id}"
-
-    #     # Update 1PSIDTS using the extracted og_pid and initValue
-    #     update_1psidts_url = "https://accounts.google.com/RotateCookies"
-    #     headers_rotate = {
-    #         "Host": "accounts.google.com",
-    #         "Content-Type": "application/json",
-    #         "Referer": update_cookies_url,
-    #         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
-    #     }
-    #     # headers_rotate.update(self.headers)
-
-    #     response = self.session.post(
-    #         update_1psidts_url,
-    #         data=data,
-    #         headers=headers_rotate,
-    #         timeout=self.timeout,
-    #         proxies=self.proxies,
-    #     )
-    #     response.raise_for_status()
-
-    #     # Extract updated 1PSIDTS from the response headers
-    #     cookie_headers = response.headers.get("Set-Cookie", "")
-    #     parsed_cookies = self.parse_cookies(cookie_headers)
-    #     return parsed_cookies
-
-    # def parse_cookies(self, cookie_headers):
-    #     cookie_dict = {}
-
-    #     matches = re.findall(r"([^;]+)", cookie_headers)
-
-    #     for match in matches:
-    #         key_value = match.split("=")
-    #         if len(key_value) == 2:
-    #             cookie_dict[key_value[0].strip()] = key_value[1].strip()
-
-    #     return cookie_dict
